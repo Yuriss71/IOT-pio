@@ -1,6 +1,8 @@
 #include <Arduino.h>
 
+#ifndef RFID_ENABLED
 #define RFID_ENABLED 1
+#endif
 
 #define TRIG_PIN D1
 #define ECHO_PIN D2
