@@ -11,15 +11,13 @@ void setup() {
   Serial.begin(115200);
   SPI.begin();
   rfid.PCD_Init();
+  delay(4);
 }
 
 void loop() {
-  Serial.println(rfid.PICC_IsNewCardPresent());
-  Serial.println(rfid.PICC_ReadCardSerial());
-  
   if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial()) {
     Serial.println("Aucun badge détecté.");
-    delay(500);
+    delay(300);
     return;
   }
 
@@ -35,3 +33,4 @@ void loop() {
   rfid.PCD_StopCrypto1();
   delay(500);
 }
+
