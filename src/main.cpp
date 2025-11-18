@@ -1,7 +1,12 @@
 #include <Arduino.h>
 #include <WiFiManager.h>
+#include <PubSubClient.h>
 
 String deviceID;
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+const char* mqtt_server = "broker.emqx.io";
 
 String generateDeviceID() {
   uint8_t mac[6];
@@ -22,6 +27,8 @@ bool soundEnabled = true;
 long duration;
 float distanceCm;
 
+bool objectDetected = false;
+
 #ifndef RFID_ENABLED
 #define RFID_ENABLED 1
 #endif
@@ -36,6 +43,15 @@ float distanceCm;
   const unsigned long rfidInterval = 300;
 #endif
 
+void reconnect() {
+  while (!client.connected()) {
+    if (client.connect(deviceID.c_str())) {
+      Serial.println("MQTT connecté");
+    } else {
+      delay(2000);
+    }
+  }
+}
 
 void setup() {
   Serial.begin(115200);
@@ -44,12 +60,13 @@ void setup() {
   Serial.println("Device ID: " + deviceID);
 
   WiFiManager wm;
-  String deviceIDHTML = "<p><b>Device ID:</b> " + deviceID + "</p>";
+
+  String deviceIDHTML = "<p><b>Ajoutez cet identifiant unique à votre compte:</b> " + deviceID + "</p>";
   WiFiManagerParameter customID(deviceIDHTML.c_str());
   wm.addParameter(&customID);
 
-  if (!wm.autoConnect("SetupWifi")) {
-    Serial.println("Failed to connect and hit timeout");
+  String apName = "LIDL_" + deviceID;
+  if (!wm.autoConnect(apName.c_str())) {
     ESP.restart();
   }
   Serial.println("Connected! IP: " + WiFi.localIP().toString());
@@ -58,16 +75,16 @@ void setup() {
   pinMode(ECHO_PIN, INPUT);
   Serial.println("Capteur à ultrasons initialisé.");
 
+
 #if RFID_ENABLED
   SPI.begin();
   rfid.PCD_Init();
   delay(4);
   Serial.println("RFID activé");
-#else
-  Serial.println("RFID désactivé");
 #endif
-}
 
+  client.setServer(mqtt_server, 1883);
+}
 
 void readUltrasonic() {
   digitalWrite(TRIG_PIN, LOW);
@@ -77,29 +94,39 @@ void readUltrasonic() {
   digitalWrite(TRIG_PIN, LOW);
 
   duration = pulseIn(ECHO_PIN, HIGH, 25000);
-  if (duration == 0) return;
 
-  distanceCm = duration * SOUND_VELOCITY / 2;
+  if (duration == 0) {
+    distanceCm = 999;
+  } else {
+    distanceCm = duration * SOUND_VELOCITY / 2;
+  }
 
   Serial.print("[ULTRASON] Distance: ");
   Serial.print(distanceCm);
   Serial.println(" cm");
-}
 
+  if (distanceCm < 100) {
+    objectDetected = true;
+  } else if (objectDetected && distanceCm >= 100) {
+    objectDetected = false;
+
+    if (!client.connected()) reconnect();
+
+    String topic = "ynov/bdx/lidl/" + deviceID + "/count";
+    String payload = "{\"change\": 1}";
+
+    client.publish(topic.c_str(), payload.c_str());
+    Serial.println("📤 MQTT envoyé: " + topic + " => " + payload);
+  }
+}
 
 #if RFID_ENABLED
 void readRFID() {
   if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial())
     return;
 
-  Serial.print("[RFID] UID : ");
-  for (byte i = 0; i < rfid.uid.size; i++)
-    Serial.printf("%02X ", rfid.uid.uidByte[i]);
-  Serial.println();
-
   soundEnabled = !soundEnabled;
-  Serial.print("[RFID] Son ");
-  Serial.println(soundEnabled ? "activé" : "désactivé");
+  Serial.println(soundEnabled ? "[RFID] Son activé" : "[RFID] Son désactivé");
 
   rfid.PICC_HaltA();
   rfid.PCD_StopCrypto1();
@@ -108,9 +135,11 @@ void readRFID() {
 void readRFID() {}
 #endif
 
-
 void loop() {
   unsigned long now = millis();
+
+  if (!client.connected()) reconnect();
+  client.loop();
 
   if (soundEnabled && now - lastSoundRead >= soundInterval) {
     lastSoundRead = now;
