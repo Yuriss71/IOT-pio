@@ -2,33 +2,6 @@
 #include <WiFiManager.h>
 #include <PubSubClient.h>
 
-String deviceID;
-
-WiFiClient espClient;
-PubSubClient client(espClient);
-const char* mqtt_server = "broker.emqx.io";
-
-String generateDeviceID() {
-  uint8_t mac[6];
-  WiFi.macAddress(mac);
-  char buf[13];
-  sprintf(buf, "%02X%02X%02X%02X", mac[2], mac[3], mac[4], mac[5]);
-  return String(buf);
-}
-
-#define TRIG_PIN D1
-#define ECHO_PIN D2
-#define SOUND_VELOCITY 0.034
-
-unsigned long lastSoundRead = 0;
-const unsigned long soundInterval = 100;
-bool soundEnabled = true;
-
-long duration;
-float distanceCm;
-
-bool objectDetected = false;
-
 #ifndef RFID_ENABLED
 #define RFID_ENABLED 1
 #endif
@@ -43,12 +16,53 @@ bool objectDetected = false;
   const unsigned long rfidInterval = 300;
 #endif
 
+#define TRIG_PIN D1
+#define ECHO_PIN D2
+#define SOUND_VELOCITY 0.034
+
+String deviceID;
+WiFiClient espClient;
+PubSubClient client(espClient);
+const char* mqtt_server = "broker.emqx.io";
+
+unsigned long lastSoundRead = 0;
+const unsigned long soundInterval = 400;
+bool soundEnabled = true;
+
+const unsigned long maxDistanceCm = 100;
+long duration;
+float distanceCm;
+bool objectDetected = false;
+int objectIteration = 0;
+
+unsigned long lastReconnectAttempt = 0;
+const unsigned long reconnectInterval = 5000;
+
+String generateDeviceID() {
+  uint8_t mac[6];
+  WiFi.macAddress(mac);
+  char buf[13];
+  sprintf(buf, "%02X%02X%02X%02X", mac[2], mac[3], mac[4], mac[5]);
+  return String(buf);
+}
+
 void reconnect() {
-  while (!client.connected()) {
+  if (client.connected()) {
+    return;
+  }
+
+  unsigned long now = millis();
+  if (now - lastReconnectAttempt > reconnectInterval) {
+    lastReconnectAttempt = now;
+    
+    Serial.print("[MQTT] Tentative de connexion (" + deviceID + ")... ");
+
     if (client.connect(deviceID.c_str())) {
       Serial.println("MQTT connecté");
     } else {
-      delay(2000);
+      Serial.print("ECHEC. rc=");
+      Serial.print(client.state());
+      Serial.println(" (Nouvelle tentative dans 5s)");
     }
   }
 }
@@ -75,7 +89,6 @@ void setup() {
   pinMode(ECHO_PIN, INPUT);
   Serial.println("Capteur à ultrasons initialisé.");
 
-
 #if RFID_ENABLED
   SPI.begin();
   rfid.PCD_Init();
@@ -96,27 +109,32 @@ void readUltrasonic() {
   duration = pulseIn(ECHO_PIN, HIGH, 25000);
 
   if (duration == 0) {
-    distanceCm = 999;
+    distanceCm = -1;
   } else {
     distanceCm = duration * SOUND_VELOCITY / 2;
   }
 
-  Serial.print("[ULTRASON] Distance: ");
-  Serial.print(distanceCm);
-  Serial.println(" cm");
-
-  if (distanceCm < 100) {
+  if (distanceCm < maxDistanceCm && distanceCm != -1 && !objectDetected) {
+    Serial.print("[ULTRASON] Objet détecté à ");
+    Serial.print(distanceCm);
+    Serial.println(" cm");
+    objectIteration = 0;
     objectDetected = true;
-  } else if (objectDetected && distanceCm >= 100) {
-    objectDetected = false;
+  } else if (objectDetected && (distanceCm >= maxDistanceCm || distanceCm == -1)) {
+    objectIteration++;
+    if (objectIteration >= 2) {
+        objectDetected = false;
 
-    if (!client.connected()) reconnect();
+      if (client.connected()) {
+        String topic = "ynov/bdx/lidl/" + deviceID + "/count";
+        String payload = "{\"change\": 1}";
 
-    String topic = "ynov/bdx/lidl/" + deviceID + "/count";
-    String payload = "{\"change\": 1}";
-
-    client.publish(topic.c_str(), payload.c_str());
-    Serial.println("📤 MQTT envoyé: " + topic + " => " + payload);
+        client.publish(topic.c_str(), payload.c_str());
+        Serial.println("📤 MQTT envoyé: " + topic + " => " + payload);
+      } else {
+        Serial.println("⚠️ Impossible d'envoyer MQTT (Déconnecté)");
+      }
+    }
   }
 }
 
@@ -131,14 +149,12 @@ void readRFID() {
   rfid.PICC_HaltA();
   rfid.PCD_StopCrypto1();
 }
-#else
-void readRFID() {}
 #endif
 
 void loop() {
   unsigned long now = millis();
 
-  if (!client.connected()) reconnect();
+  reconnect();
   client.loop();
 
   if (soundEnabled && now - lastSoundRead >= soundInterval) {
