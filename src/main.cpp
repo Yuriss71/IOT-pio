@@ -99,6 +99,15 @@ void setup() {
   client.setServer(mqtt_server, 1883);
 }
 
+void sendMqtt(String topic, String payload) {
+  if (client.connected()) {
+    client.publish(topic.c_str(), payload.c_str());
+    Serial.println("📤 MQTT envoyé: " + topic + " => " + payload);
+  } else {
+    Serial.println("⚠️ Impossible d'envoyer MQTT (Déconnecté)");
+  }
+}
+
 void readUltrasonic() {
   digitalWrite(TRIG_PIN, LOW);
   delayMicroseconds(2);
@@ -125,15 +134,9 @@ void readUltrasonic() {
     if (objectIteration >= 2) {
         objectDetected = false;
 
-      if (client.connected()) {
         String topic = "ynov/bdx/lidl/" + deviceID + "/count";
         String payload = "{\"change\": 1}";
-
-        client.publish(topic.c_str(), payload.c_str());
-        Serial.println("📤 MQTT envoyé: " + topic + " => " + payload);
-      } else {
-        Serial.println("⚠️ Impossible d'envoyer MQTT (Déconnecté)");
-      }
+        sendMqtt(topic, payload);
     }
   }
 }
@@ -143,8 +146,20 @@ void readRFID() {
   if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial())
     return;
 
-  soundEnabled = !soundEnabled;
-  Serial.println(soundEnabled ? "[RFID] Son activé" : "[RFID] Son désactivé");
+    String uuid = "";
+    for (byte i = 0; i < rfid.uid.size; i++) {
+      if (rfid.uid.uidByte[i] < 0x10) {
+        uuid += "0";
+      }
+      uuid += String(rfid.uid.uidByte[i], HEX);
+    }
+    uuid.toUpperCase();
+
+  String topic = "ynov/bdx/lidl/" + deviceID + "/toggle";
+  String payload = "{";
+  payload += "\"uuid\": \"" + uuid + "\"";
+  payload += "}";
+  sendMqtt(topic, payload);
 
   rfid.PICC_HaltA();
   rfid.PCD_StopCrypto1();
@@ -157,7 +172,7 @@ void loop() {
   reconnect();
   client.loop();
 
-  if (soundEnabled && now - lastSoundRead >= soundInterval) {
+  if (now - lastSoundRead >= soundInterval) {
     lastSoundRead = now;
     readUltrasonic();
   }
