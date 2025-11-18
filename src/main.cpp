@@ -1,8 +1,15 @@
 #include <Arduino.h>
+#include <WiFiManager.h>
 
-#ifndef RFID_ENABLED
-#define RFID_ENABLED 1
-#endif
+String deviceID;
+
+String generateDeviceID() {
+  uint8_t mac[6];
+  WiFi.macAddress(mac);
+  char buf[13];
+  sprintf(buf, "%02X%02X%02X%02X", mac[2], mac[3], mac[4], mac[5]);
+  return String(buf);
+}
 
 #define TRIG_PIN D1
 #define ECHO_PIN D2
@@ -15,12 +22,15 @@ bool soundEnabled = true;
 long duration;
 float distanceCm;
 
+#ifndef RFID_ENABLED
+#define RFID_ENABLED 1
+#endif
+
 #if RFID_ENABLED
   #include <SPI.h>
   #include <MFRC522.h>
   #define SS_PIN D8
   #define RST_PIN D4
-
   MFRC522 rfid(SS_PIN, RST_PIN);
   unsigned long lastRFIDRead = 0;
   const unsigned long rfidInterval = 300;
@@ -29,6 +39,20 @@ float distanceCm;
 
 void setup() {
   Serial.begin(115200);
+
+  deviceID = generateDeviceID();
+  Serial.println("Device ID: " + deviceID);
+
+  WiFiManager wm;
+  String deviceIDHTML = "<p><b>Device ID:</b> " + deviceID + "</p>";
+  WiFiManagerParameter customID(deviceIDHTML.c_str());
+  wm.addParameter(&customID);
+
+  if (!wm.autoConnect("SetupWifi")) {
+    Serial.println("Failed to connect and hit timeout");
+    ESP.restart();
+  }
+  Serial.println("Connected! IP: " + WiFi.localIP().toString());
 
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
@@ -88,13 +112,10 @@ void readRFID() {}
 void loop() {
   unsigned long now = millis();
 
-  if (soundEnabled) {
-    if (now - lastSoundRead >= soundInterval) {
-      lastSoundRead = now;
-      readUltrasonic();
-    }
+  if (soundEnabled && now - lastSoundRead >= soundInterval) {
+    lastSoundRead = now;
+    readUltrasonic();
   }
-
 
 #if RFID_ENABLED
   if (now - lastRFIDRead >= rfidInterval) {
