@@ -22,7 +22,7 @@
 
 String deviceID;
 WiFiClient espClient;
-PubSubClient client(espClient);
+
 const char* mqtt_server = "broker.emqx.io";
 
 unsigned long lastSoundRead = 0;
@@ -59,6 +59,9 @@ void reconnect() {
 
     if (client.connect(deviceID.c_str())) {
       Serial.println("MQTT connecté");
+      String resetTopic = "ynov/bdx/lidl/" + deviceID + "/reset";
+      client.subscribe(resetTopic.c_str());
+      Serial.println("📥 Subscribed à: " + resetTopic);
     } else {
       Serial.print("ECHEC. rc=");
       Serial.print(client.state());
@@ -67,6 +70,24 @@ void reconnect() {
   }
 }
 
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  String message = "";
+  for (unsigned int i = 0; i < length; i++) {
+    message += (char)payload[i];
+  }
+
+  Serial.println("[MQTT] Message reçu sur " + String(topic) + ": " + message);
+  String resetTopic = "ynov/bdx/lidl/" + deviceID + "/reset";
+  if (String(topic) == resetTopic) {
+    Serial.println("🧹 RESET demandé via MQTT !");
+    WiFiManager wm;
+    wm.resetSettings(); 
+    delay(1000);
+    ESP.restart();
+  }
+}
+
+
 void setup() {
   Serial.begin(115200);
 
@@ -74,6 +95,7 @@ void setup() {
   Serial.println("Device ID: " + deviceID);
 
   WiFiManager wm;
+  wm.setCaptivePortalEnable(true);
 
   String deviceIDHTML = "<p><b>Ajoutez cet identifiant unique à votre compte:</b> " + deviceID + "</p>";
   WiFiManagerParameter customID(deviceIDHTML.c_str());
@@ -83,6 +105,7 @@ void setup() {
   if (!wm.autoConnect(apName.c_str())) {
     ESP.restart();
   }
+  PubSubClient client(espClient);
   Serial.println("Connected! IP: " + WiFi.localIP().toString());
 
   pinMode(TRIG_PIN, OUTPUT);
@@ -97,6 +120,7 @@ void setup() {
 #endif
 
   client.setServer(mqtt_server, 1883);
+  client.setCallback(mqttCallback);
 }
 
 void sendMqtt(String topic, String payload) {
@@ -142,28 +166,28 @@ void readUltrasonic() {
 }
 
 #if RFID_ENABLED
-void readRFID() {
-  if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial())
-    return;
+  void readRFID() {
+    if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial())
+      return;
 
-    String uuid = "";
-    for (byte i = 0; i < rfid.uid.size; i++) {
-      if (rfid.uid.uidByte[i] < 0x10) {
-        uuid += "0";
+      String uuid = "";
+      for (byte i = 0; i < rfid.uid.size; i++) {
+        if (rfid.uid.uidByte[i] < 0x10) {
+          uuid += "0";
+        }
+        uuid += String(rfid.uid.uidByte[i], HEX);
       }
-      uuid += String(rfid.uid.uidByte[i], HEX);
-    }
-    uuid.toUpperCase();
+      uuid.toUpperCase();
 
-  String topic = "ynov/bdx/lidl/" + deviceID + "/toggle";
-  String payload = "{";
-  payload += "\"uuid\": \"" + uuid + "\"";
-  payload += "}";
-  sendMqtt(topic, payload);
+    String topic = "ynov/bdx/lidl/" + deviceID + "/toggle";
+    String payload = "{";
+    payload += "\"uuid\": \"" + uuid + "\"";
+    payload += "}";
+    sendMqtt(topic, payload);
 
-  rfid.PICC_HaltA();
-  rfid.PCD_StopCrypto1();
-}
+    rfid.PICC_HaltA();
+    rfid.PCD_StopCrypto1();
+  }
 #endif
 
 void loop() {
