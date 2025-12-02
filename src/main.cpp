@@ -22,6 +22,7 @@
 
 String deviceID;
 WiFiClient espClient;
+PubSubClient client(espClient);
 
 const char* mqtt_server = "broker.emqx.io";
 
@@ -37,6 +38,12 @@ int objectIteration = 0;
 
 unsigned long lastReconnectAttempt = 0;
 const unsigned long reconnectInterval = 5000;
+
+bool shouldSaveConfig = false;
+
+void saveConfigCallback() {
+  shouldSaveConfig = true;
+}
 
 String generateDeviceID() {
   uint8_t mac[6];
@@ -55,17 +62,9 @@ void reconnect() {
   if (now - lastReconnectAttempt > reconnectInterval) {
     lastReconnectAttempt = now;
     
-    Serial.print("[MQTT] Tentative de connexion (" + deviceID + ")... ");
-
     if (client.connect(deviceID.c_str())) {
-      Serial.println("MQTT connecté");
       String resetTopic = "ynov/bdx/lidl/" + deviceID + "/reset";
       client.subscribe(resetTopic.c_str());
-      Serial.println("📥 Subscribed à: " + resetTopic);
-    } else {
-      Serial.print("ECHEC. rc=");
-      Serial.print(client.state());
-      Serial.println(" (Nouvelle tentative dans 5s)");
     }
   }
 }
@@ -76,10 +75,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     message += (char)payload[i];
   }
 
-  Serial.println("[MQTT] Message reçu sur " + String(topic) + ": " + message);
   String resetTopic = "ynov/bdx/lidl/" + deviceID + "/reset";
   if (String(topic) == resetTopic) {
-    Serial.println("🧹 RESET demandé via MQTT !");
     WiFiManager wm;
     wm.resetSettings(); 
     delay(1000);
@@ -87,14 +84,13 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   }
 }
 
-
 void setup() {
   Serial.begin(115200);
 
   deviceID = generateDeviceID();
-  Serial.println("Device ID: " + deviceID);
 
   WiFiManager wm;
+  wm.setSaveConfigCallback(saveConfigCallback);
   wm.setCaptivePortalEnable(true);
 
   String deviceIDHTML = "<p><b>Ajoutez cet identifiant unique à votre compte:</b> " + deviceID + "</p>";
@@ -105,18 +101,19 @@ void setup() {
   if (!wm.autoConnect(apName.c_str())) {
     ESP.restart();
   }
-  PubSubClient client(espClient);
-  Serial.println("Connected! IP: " + WiFi.localIP().toString());
+
+  if (shouldSaveConfig) {
+    delay(1000);
+    ESP.restart();
+  }
 
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
-  Serial.println("Capteur à ultrasons initialisé.");
 
 #if RFID_ENABLED
   SPI.begin();
   rfid.PCD_Init();
   delay(4);
-  Serial.println("RFID activé");
 #endif
 
   client.setServer(mqtt_server, 1883);
@@ -126,9 +123,6 @@ void setup() {
 void sendMqtt(String topic, String payload) {
   if (client.connected()) {
     client.publish(topic.c_str(), payload.c_str());
-    Serial.println("📤 MQTT envoyé: " + topic + " => " + payload);
-  } else {
-    Serial.println("⚠️ Impossible d'envoyer MQTT (Déconnecté)");
   }
 }
 
@@ -148,16 +142,12 @@ void readUltrasonic() {
   }
 
   if (distanceCm < maxDistanceCm && distanceCm != -1 && !objectDetected) {
-    Serial.print("[ULTRASON] Objet détecté à ");
-    Serial.print(distanceCm);
-    Serial.println(" cm");
     objectIteration = 0;
     objectDetected = true;
   } else if (objectDetected && (distanceCm >= maxDistanceCm || distanceCm == -1)) {
     objectIteration++;
     if (objectIteration >= 2) {
         objectDetected = false;
-
         String topic = "ynov/bdx/lidl/" + deviceID + "/count";
         String payload = "{\"change\": 1}";
         sendMqtt(topic, payload);
@@ -193,7 +183,9 @@ void readUltrasonic() {
 void loop() {
   unsigned long now = millis();
 
-  reconnect();
+  if (!client.connected()) {
+    reconnect();
+  }
   client.loop();
 
   if (now - lastSoundRead >= soundInterval) {
