@@ -190,16 +190,15 @@ void readUltrasonic() {
       }
       uuid.toUpperCase();
 
+    rfid.PICC_HaltA();
+    rfid.PCD_StopCrypto1();
+
     String topic = "ynov/bdx/lidl/" + deviceID + "/toggle";
     String payload = "{";
     payload += "\"uuid\": \"" + uuid + "\"";
     payload += "}";
     sendMqtt(topic, payload);
-
-    rfid.PICC_HaltA();
-    rfid.PCD_StopCrypto1();
     }
-
   }
 #endif
 
