@@ -27,7 +27,7 @@ PubSubClient client(espClient);
 const char* mqtt_server = "broker.emqx.io";
 
 unsigned long lastSoundRead = 0;
-const unsigned long soundInterval = 400;
+const unsigned long soundInterval = 300;
 bool soundEnabled = true;
 
 const unsigned long maxDistanceCm = 100;
@@ -63,8 +63,14 @@ void reconnect() {
     lastReconnectAttempt = now;
     
     if (client.connect(deviceID.c_str())) {
+      Serial.println("MQTT connecté");  
       String resetTopic = "ynov/bdx/lidl/" + deviceID + "/reset";
       client.subscribe(resetTopic.c_str());
+      Serial.println("📥 Subscribed à: " + resetTopic);
+    }else {
+      Serial.print("ECHEC. rc=");
+      Serial.print(client.state());
+      Serial.println(" (Nouvelle tentative dans 5s)");
     }
   }
 }
@@ -75,8 +81,10 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     message += (char)payload[i];
   }
 
+  Serial.println("[MQTT] Message reçu sur " + String(topic) + ": " + message);
   String resetTopic = "ynov/bdx/lidl/" + deviceID + "/reset";
   if (String(topic) == resetTopic) {
+    Serial.println("🧹 RESET demandé via MQTT !");
     WiFiManager wm;
     wm.resetSettings(); 
     delay(1000);
@@ -106,14 +114,17 @@ void setup() {
     delay(1000);
     ESP.restart();
   }
+  Serial.println("Connected! IP: " + WiFi.localIP().toString());
 
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
+  Serial.println("Capteur à ultrasons initialisé.");
 
 #if RFID_ENABLED
   SPI.begin();
   rfid.PCD_Init();
   delay(4);
+  Serial.println("RFID activé");
 #endif
 
   client.setServer(mqtt_server, 1883);
@@ -123,6 +134,9 @@ void setup() {
 void sendMqtt(String topic, String payload) {
   if (client.connected()) {
     client.publish(topic.c_str(), payload.c_str());
+    Serial.println("📤 MQTT envoyé: " + topic + " => " + payload);
+  } else {
+    Serial.println("⚠️ Impossible d'envoyer MQTT (Déconnecté)");
   }
 }
 
@@ -142,6 +156,9 @@ void readUltrasonic() {
   }
 
   if (distanceCm < maxDistanceCm && distanceCm != -1 && !objectDetected) {
+    Serial.print("[ULTRASON] Objet détecté à ");
+    Serial.print(distanceCm);
+    Serial.println(" cm");
     objectIteration = 0;
     objectDetected = true;
   } else if (objectDetected && (distanceCm >= maxDistanceCm || distanceCm == -1)) {
@@ -157,9 +174,13 @@ void readUltrasonic() {
 
 #if RFID_ENABLED
   void readRFID() {
-    if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial())
-      return;
+    if (!rfid.PICC_IsNewCardPresent()) {
+      return; 
+    }
 
+    Serial.println("[RFID] Carte détectée");
+    if (rfid.PICC_ReadCardSerial()) {
+      Serial.println("[RFID] Carte lue");
       String uuid = "";
       for (byte i = 0; i < rfid.uid.size; i++) {
         if (rfid.uid.uidByte[i] < 0x10) {
@@ -177,6 +198,8 @@ void readUltrasonic() {
 
     rfid.PICC_HaltA();
     rfid.PCD_StopCrypto1();
+    }
+
   }
 #endif
 
